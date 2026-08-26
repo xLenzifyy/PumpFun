@@ -13,7 +13,15 @@ function connectPumpApi() {
     console.log('[RELAY] Connecting to PumpAPI upstream...');
     
     // Connect to the secure PumpAPI stream as a Node backend (bypasses browser CORS/1008 blocks)
-    pumpApiWs = new WebSocket('wss://stream.pumpapi.io/');
+    // Connect to PumpAPI with spoofed browser headers to bypass their firewall
+    pumpApiWs = new WebSocket('wss://stream.pumpapi.io/', {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Origin': 'https://pump.fun',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'no-cache'
+        }
+    });
 
     pumpApiWs.on('open', () => {
         console.log('[RELAY] Connected to PumpAPI stream successfully!');
