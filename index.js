@@ -1,66 +1,71 @@
+/**
+ * Mayhem Bot - Node.js WebSocket Relay Server
+ * Run: npm install ws
+ * Start: node server.js
+ */
+
 import { WebSocketServer, WebSocket } from 'ws';
 
-// Bind to the port provided by your host (e.g., Render/Railway) or default to 8765
-const PORT = process.env.SERVER_PORT || 8765;
+const PORT = process.env.PORT || 8080;
+const UPSTREAM_WS_URL = 'wss://stream.pumpapi.io/';
 
-// Create the WebSocket server that your users' extensions will connect to
-const localWss = new WebSocketServer({ host: '0.0.0.0', port: PORT });
-let pumpApiWs = null;
+// Create WebSocket server for browser clients
+const wss = new WebSocketServer({ port: PORT });
+console.log(`[RELAY SERVER] Listening on port ${PORT}`);
 
-console.log(`[RELAY] Host Server active and listening on port ${PORT}`);
+let upstreamWs = null;
+const clientSockets = new Set();
 
-function connectPumpApi() {
-    console.log('[RELAY] Connecting to PumpAPI upstream...');
-    
-    // Connect to the secure PumpAPI stream as a Node backend (bypasses browser CORS/1008 blocks)
-    // Connect to PumpAPI with spoofed browser headers to bypass their firewall
-    pumpApiWs = new WebSocket('wss://stream.pumpapi.io/', {
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Origin': 'https://pump.fun',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Cache-Control': 'no-cache'
-        }
-    });
+function connectUpstream() {
+  console.log(`[RELAY SERVER] Connecting to upstream: ${UPSTREAM_WS_URL}`);
+  
+  upstreamWs = new WebSocket(UPSTREAM_WS_URL);
 
-    pumpApiWs.on('open', () => {
-        console.log('[RELAY] Connected to PumpAPI stream successfully!');
-    });
+  upstreamWs.on('open', () => {
+    console.log('[RELAY SERVER] Connected to PumpAPI stream successfully.');
+  });
 
-    pumpApiWs.on('message', (data) => {
-        const messageStr = data.toString();
-        
-        // Broadcast the incoming event to EVERY connected user extension
-        let activeClients = 0;
-        localWss.clients.forEach((client) => {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(messageStr);
-                activeClients++;
-            }
-        });
-        
-        // Optional: Log how many clients are receiving the data
-        // console.log(`[RELAY] Broadcasted event to ${activeClients} users.`);
-    });
+  upstreamWs.on('message', (rawData) => {
+    // Broadcast data to all connected browser extension tabs
+    for (const client of clientSockets) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(rawData.toString());
+      }
+    }
+  });
 
-    pumpApiWs.on('error', (err) => {
-        console.error('[RELAY ERROR]', err.message);
-    });
+  upstreamWs.on('error', (err) => {
+    console.error('[RELAY SERVER] Upstream error:', err.message);
+  });
 
-    pumpApiWs.on('close', () => {
-        console.log('[RELAY WARNING] PumpAPI disconnected. Reconnecting in 3 seconds...');
-        setTimeout(connectPumpApi, 3000);
-    });
+  upstreamWs.on('close', () => {
+    console.warn('[RELAY SERVER] Upstream connection closed. Reconnecting in 3s...');
+    setTimeout(connectUpstream, 3000);
+  });
 }
 
-// Start the upstream connection
-connectPumpApi();
+// Handle client connections from your Chrome extension
+wss.on('connection', (ws) => {
+  console.log('[RELAY SERVER] Chrome Extension client connected.');
+  clientSockets.add(ws);
 
-// Handle incoming user connections for logging
-localWss.on('connection', (socket) => {
-    console.log(`[RELAY] New user extension connected! Total users: ${localWss.clients.size}`);
-    
-    socket.on('close', () => {
-        console.log(`[RELAY] User disconnected. Total users: ${localWss.clients.size}`);
-    });
+  // Forward any commands/subscriptions from the browser up to the stream
+  ws.on('message', (msg) => {
+    if (upstreamWs && upstreamWs.readyState === WebSocket.OPEN) {
+      upstreamWs.send(msg.toString());
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('[RELAY SERVER] Chrome Extension client disconnected.');
+    clientSockets.delete(ws);
+  });
+
+  ws.on('error', (err) => {
+    console.error('[RELAY SERVER] Client socket error:', err.message);
+    clientSockets.delete(ws);
+  });
 });
+
+// Start upstream link
+connectUpstream();
